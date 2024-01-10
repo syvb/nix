@@ -21,6 +21,13 @@ MakeError(TypeError, EvalError);
 MakeError(UndefinedVarError, Error);
 MakeError(MissingArgumentError, EvalError);
 
+class InfiniteRecursionError : public EvalError
+{
+    friend class EvalState;
+public:
+    using EvalError::EvalError;
+};
+
 /**
  * Position objects.
  */
@@ -131,6 +138,7 @@ std::ostream & operator << (std::ostream & str, const Pos & pos);
 struct Env;
 struct Value;
 class EvalState;
+struct ExprWith;
 struct StaticEnv;
 
 
@@ -219,8 +227,11 @@ struct ExprVar : Expr
     Symbol name;
 
     /* Whether the variable comes from an environment (e.g. a rec, let
-       or function argument) or from a "with". */
-    bool fromWith;
+       or function argument) or from a "with".
+
+       `nullptr`: Not from a `with`.
+       Valid pointer: the nearest, innermost `with` expression to query first. */
+    ExprWith * fromWith;
 
     /* In the former case, the value is obtained by going `level`
        levels up from the current environment and getting the
@@ -292,6 +303,7 @@ struct ExprList : Expr
     std::vector<Expr *> elems;
     ExprList() { };
     COMMON_METHODS
+    Value * maybeThunk(EvalState & state, Env & env) override;
 
     PosIdx getPos() const override
     {
@@ -378,6 +390,7 @@ struct ExprWith : Expr
     PosIdx pos;
     Expr * attrs, * body;
     size_t prevWith;
+    ExprWith * parentWith;
     ExprWith(const PosIdx & pos, Expr * attrs, Expr * body) : pos(pos), attrs(attrs), body(body) { };
     PosIdx getPos() const override { return pos; }
     COMMON_METHODS
@@ -405,6 +418,7 @@ struct ExprOpNot : Expr
 {
     Expr * e;
     ExprOpNot(Expr * e) : e(e) { };
+    PosIdx getPos() const override { return e->getPos(); }
     COMMON_METHODS
 };
 
@@ -454,20 +468,30 @@ struct ExprPos : Expr
     COMMON_METHODS
 };
 
+/* only used to mark thunks as black holes. */
+struct ExprBlackHole : Expr
+{
+    void show(const SymbolTable & symbols, std::ostream & str) const override {}
+    void eval(EvalState & state, Env & env, Value & v) override;
+    void bindVars(EvalState & es, const std::shared_ptr<const StaticEnv> & env) override {}
+};
+
+extern ExprBlackHole eBlackHole;
+
 
 /* Static environments are used to map variable names onto (level,
    displacement) pairs used to obtain the value of the variable at
    runtime. */
 struct StaticEnv
 {
-    bool isWith;
+    ExprWith * isWith;
     const StaticEnv * up;
 
     // Note: these must be in sorted order.
     typedef std::vector<std::pair<Symbol, Displacement>> Vars;
     Vars vars;
 
-    StaticEnv(bool isWith, const StaticEnv * up, size_t expectedSize = 0) : isWith(isWith), up(up) {
+    StaticEnv(ExprWith * isWith, const StaticEnv * up, size_t expectedSize = 0) : isWith(isWith), up(up) {
         vars.reserve(expectedSize);
     };
 

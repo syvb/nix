@@ -30,14 +30,12 @@ struct InputAccessor : virtual SourceAccessor, std::enable_shared_from_this<Inpu
     }
 
     StorePath fetchToStore(
-        ref<Store> store,
+        Store & store,
         const CanonPath & path,
         std::string_view name = "source",
-        FileIngestionMethod method = FileIngestionMethod::Recursive,
+        ContentAddressMethod method = FileIngestionMethod::Recursive,
         PathFilter * filter = nullptr,
         RepairFlag repair = NoRepair);
-
-    SourcePath root();
 };
 
 /**
@@ -50,6 +48,11 @@ struct SourcePath
 {
     ref<InputAccessor> accessor;
     CanonPath path;
+
+    SourcePath(ref<InputAccessor> accessor, CanonPath path = CanonPath::root)
+        : accessor(std::move(accessor))
+        , path(std::move(path))
+    { }
 
     std::string_view baseName() const;
 
@@ -113,9 +116,9 @@ struct SourcePath
      * Copy this `SourcePath` to the Nix store.
      */
     StorePath fetchToStore(
-        ref<Store> store,
+        Store & store,
         std::string_view name = "source",
-        FileIngestionMethod method = FileIngestionMethod::Recursive,
+        ContentAddressMethod method = FileIngestionMethod::Recursive,
         PathFilter * filter = nullptr,
         RepairFlag repair = NoRepair) const;
 
@@ -127,7 +130,7 @@ struct SourcePath
     { return accessor->getPhysicalPath(path); }
 
     std::string to_string() const
-    { return path.abs(); }
+    { return accessor->showPath(path); }
 
     /**
      * Append a `CanonPath` to this path.

@@ -9,6 +9,7 @@
 #include "processes.hh"
 #include "git.hh"
 #include "fs-input-accessor.hh"
+#include "filtering-input-accessor.hh"
 #include "mounted-input-accessor.hh"
 #include "git-utils.hh"
 #include "logging.hh"
@@ -52,7 +53,7 @@ bool touchCacheFile(const Path & path, time_t touch_time)
 Path getCachePath(std::string_view key)
 {
     return getCacheDir() + "/nix/gitv3/" +
-        hashString(htSHA256, key).to_string(HashFormat::Base32, false);
+        hashString(HashAlgorithm::SHA256, key).to_string(HashFormat::Nix32, false);
 }
 
 // Returns the name of the HEAD branch.
@@ -313,15 +314,26 @@ struct GitInputScheme : InputScheme
 
         writeFile((CanonPath(repoInfo.url) + path).abs(), contents);
 
-        runProgram("git", true,
-            { "-C", repoInfo.url, "--git-dir", repoInfo.gitDir, "add", "--intent-to-add", "--", std::string(path.rel()) });
+        auto result = runProgram(RunOptions {
+            .program = "git",
+            .args = {"-C", repoInfo.url, "--git-dir", repoInfo.gitDir, "check-ignore", "--quiet", std::string(path.rel())},
+        });
+        auto exitCode = WEXITSTATUS(result.first);
 
-        // Pause the logger to allow for user input (such as a gpg passphrase) in `git commit`
-        logger->pause();
-        Finally restoreLogger([]() { logger->resume(); });
-        if (commitMsg)
+        if (exitCode != 0) {
+            // The path is not `.gitignore`d, we can add the file.
             runProgram("git", true,
-                { "-C", repoInfo.url, "--git-dir", repoInfo.gitDir, "commit", std::string(path.rel()), "-m", *commitMsg });
+                { "-C", repoInfo.url, "--git-dir", repoInfo.gitDir, "add", "--intent-to-add", "--", std::string(path.rel()) });
+
+
+            if (commitMsg) {
+                // Pause the logger to allow for user input (such as a gpg passphrase) in `git commit`
+                logger->pause();
+                Finally restoreLogger([]() { logger->resume(); });
+                runProgram("git", true,
+                    { "-C", repoInfo.url, "--git-dir", repoInfo.gitDir, "commit", std::string(path.rel()), "-m", *commitMsg });
+            }
+        }
     }
 
     struct RepoInfo
@@ -367,14 +379,14 @@ struct GitInputScheme : InputScheme
 
     RepoInfo getRepoInfo(const Input & input) const
     {
-        auto checkHashType = [&](const std::optional<Hash> & hash)
+        auto checkHashAlgorithm = [&](const std::optional<Hash> & hash)
         {
-            if (hash.has_value() && !(hash->type == htSHA1 || hash->type == htSHA256))
+            if (hash.has_value() && !(hash->algo == HashAlgorithm::SHA1 || hash->algo == HashAlgorithm::SHA256))
                 throw Error("Hash '%s' is not supported by Git. Supported types are sha1 and sha256.", hash->to_string(HashFormat::Base16, true));
         };
 
         if (auto rev = input.getRev())
-            checkHashType(rev);
+            checkHashAlgorithm(rev);
 
         RepoInfo repoInfo;
 
@@ -559,7 +571,7 @@ struct GitInputScheme : InputScheme
                         repoInfo.url
                         );
             } else
-                input.attrs.insert_or_assign("rev", Hash::parseAny(chomp(readFile(localRefFile)), htSHA1).gitRev());
+                input.attrs.insert_or_assign("rev", Hash::parseAny(chomp(readFile(localRefFile)), HashAlgorithm::SHA1).gitRev());
 
             // cache dir lock is removed at scope end; we will only use read-only operations on specific revisions in the remainder
         }
@@ -639,7 +651,10 @@ struct GitInputScheme : InputScheme
                 repoInfo.workdirInfo.files.insert(submodule.path);
 
         ref<InputAccessor> accessor =
-            makeFSInputAccessor(CanonPath(repoInfo.url), repoInfo.workdirInfo.files, makeNotAllowedError(repoInfo.url));
+            AllowListInputAccessor::create(
+                makeFSInputAccessor(CanonPath(repoInfo.url)),
+                std::move(repoInfo.workdirInfo.files),
+                makeNotAllowedError(repoInfo.url));
 
         /* If the repo has submodules, return a mounted input accessor
            consisting of the accessor for the top-level repo and the

@@ -5,7 +5,7 @@
 
 #include <setjmp.h>
 
-#ifdef READLINE
+#ifdef USE_READLINE
 #include <readline/history.h>
 #include <readline/readline.h>
 #else
@@ -112,7 +112,7 @@ NixRepl::NixRepl(const SearchPath & searchPath, nix::ref<Store> store, ref<EvalS
     : AbstractNixRepl(state)
     , debugTraceIndex(0)
     , getValues(getValues)
-    , staticEnv(new StaticEnv(false, state->staticBaseEnv.get()))
+    , staticEnv(new StaticEnv(nullptr, state->staticBaseEnv.get()))
     , historyFile(getDataDir() + "/nix/repl-history")
 {
 }
@@ -249,14 +249,14 @@ void NixRepl::mainLoop()
     } catch (SysError & e) {
         logWarning(e.info());
     }
-#ifndef READLINE
+#ifndef USE_READLINE
     el_hist_size = 1000;
 #endif
     read_history(historyFile.c_str());
     auto oldRepl = curRepl;
     curRepl = this;
     Finally restoreRepl([&] { curRepl = oldRepl; });
-#ifndef READLINE
+#ifndef USE_READLINE
     rl_set_complete_func(completionCallback);
     rl_set_list_possib_func(listPossibleCallback);
 #endif
@@ -888,7 +888,7 @@ void NixRepl::evalString(std::string s, Value & v)
 {
     Expr * e = parseString(s);
     e->eval(*state, *env, v);
-    state->forceValue(v, [&]() { return v.determinePos(noPos); });
+    state->forceValue(v, v.determinePos(noPos));
 }
 
 
@@ -907,7 +907,7 @@ std::ostream & NixRepl::printValue(std::ostream & str, Value & v, unsigned int m
     str.flush();
     checkInterrupt();
 
-    state->forceValue(v, [&]() { return v.determinePos(noPos); });
+    state->forceValue(v, v.determinePos(noPos));
 
     switch (v.type()) {
 
