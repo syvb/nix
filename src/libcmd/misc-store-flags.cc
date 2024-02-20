@@ -106,7 +106,7 @@ Args::Flag contentAddressMethod(ContentAddressMethod * method)
     - `flat`: Assumes that the input is a single file and directly passes it to the hash function;
 
     - `text`: Like `flat`, but used for
-      [derivations](@docroot@/glossary.md#store-derivation) serialized in store object,
+      [derivations](@docroot@/glossary.md#store-derivation) serialized in store object and 
       [`builtins.toFile`](@docroot@/language/builtins.html#builtins-toFile).
       For advanced use-cases only;
       for regular usage prefer `nar` and `flat.
